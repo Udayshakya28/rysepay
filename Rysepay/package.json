@@ -1,0 +1,25 @@
+{
+  "name": "ryse-payments",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ryse Payments — UPI Without Borders (cross-border INR↔JPY payment platform)",
+  "packageManager": "pnpm@11.0.5",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @ryse/server dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "db:migrate": "pnpm --filter @ryse/server prisma:migrate",
+    "db:generate": "pnpm --filter @ryse/server prisma:generate",
+    "db:studio": "pnpm --filter @ryse/server prisma:studio",
+    "db:seed": "pnpm --filter @ryse/server prisma:seed"
+  },
+  "devDependencies": {
+    "typescript": "5.6.3",
+    "@types/node": "22.9.0"
+  }
+}

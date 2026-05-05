@@ -1,0 +1,311 @@
+// Ryse Payments — database schema
+// Generated and migrated via: pnpm db:migrate
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────── Enums ─────────────────────────
+
+enum Currency {
+  INR
+  JPY
+}
+
+enum CountryCode {
+  IN
+  JP
+}
+
+enum UserType {
+  consumer
+  merchant
+  admin
+}
+
+enum KycStatus {
+  pending
+  verified
+  rejected
+}
+
+enum MerchantStatus {
+  active
+  suspended
+  inactive
+}
+
+enum PaymentMethod {
+  upi
+  jpy_bank_transfer
+  jpy_card
+  konbini
+}
+
+enum PaymentIntentStatus {
+  created
+  processing
+  completed
+  failed
+  refunded
+  disputed
+}
+
+enum TransactionType {
+  payment
+  refund
+  chargeback
+  settlement
+}
+
+enum TransactionStatus {
+  pending
+  completed
+  failed
+  reversed
+}
+
+enum LedgerEntryType {
+  debit
+  credit
+}
+
+enum AccountType {
+  user_wallet
+  merchant_settlement
+  fx_reserve
+  fee_account
+}
+
+enum SettlementStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+// ───────────────────────── Tables ─────────────────────────
+
+model User {
+  id            String      @id @default(uuid()) @db.Uuid
+  email         String      @unique
+  phone         String?     // AES-256 encrypted at app layer
+  passwordHash  String      @map("password_hash")
+  userType      UserType    @map("user_type")
+  kycStatus     KycStatus   @default(pending) @map("kyc_status")
+  countryCode   CountryCode @map("country_code")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  deletedAt     DateTime?   @map("deleted_at")
+
+  merchants       Merchant[]
+  paymentIntents  PaymentIntent[]
+  refreshTokens   RefreshToken[]
+  accounts        Account[]
+  auditLogs       AuditLog[]
+
+  @@index([email])
+  @@map("users")
+}
+
+model Merchant {
+  id                       String         @id @default(uuid()) @db.Uuid
+  userId                   String         @map("user_id") @db.Uuid
+  businessName             String         @map("business_name")
+  merchantId               String         @unique @map("merchant_id")
+  settlementCurrency       Currency       @map("settlement_currency")
+  settlementAccountDetails Json?          @map("settlement_account_details") // encrypted
+  webhookUrl               String?        @map("webhook_url")
+  apiKeyHash               String         @map("api_key_hash")
+  apiKeyPrefix             String         @map("api_key_prefix") // first 8 chars, for display
+  status                   MerchantStatus @default(active)
+  createdAt                DateTime       @default(now()) @map("created_at")
+  updatedAt                DateTime       @updatedAt @map("updated_at")
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  paymentIntents  PaymentIntent[]
+  accounts        Account[]
+  settlements     Settlement[]
+
+  @@index([userId])
+  @@index([apiKeyPrefix])
+  @@map("merchants")
+}
+
+model PaymentIntent {
+  id              String              @id @default(uuid()) @db.Uuid
+  intentId        String              @unique @map("intent_id")
+  merchantId      String              @map("merchant_id") @db.Uuid
+  userId          String?             @map("user_id") @db.Uuid
+  idempotencyKey  String              @unique @map("idempotency_key")
+  amount          Decimal             @db.Decimal(20, 4)
+  currency        Currency
+  targetCurrency  Currency            @map("target_currency")
+  fxRate          Decimal?            @map("fx_rate") @db.Decimal(20, 8)
+  fxRateLockedAt  DateTime?           @map("fx_rate_locked_at")
+  status          PaymentIntentStatus @default(created)
+  paymentMethod   PaymentMethod?      @map("payment_method")
+  metadata        Json?
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  merchant     Merchant      @relation(fields: [merchantId], references: [id])
+  user         User?         @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  @@index([merchantId])
+  @@index([userId])
+  @@index([status])
+  @@map("payment_intents")
+}
+
+model Transaction {
+  id                    String            @id @default(uuid()) @db.Uuid
+  paymentIntentId       String            @map("payment_intent_id") @db.Uuid
+  transactionId         String            @unique @map("transaction_id")
+  type                  TransactionType
+  amount                Decimal           @db.Decimal(20, 4)
+  currency              Currency
+  fxConvertedAmount     Decimal?          @map("fx_converted_amount") @db.Decimal(20, 4)
+  fxConvertedCurrency   Currency?         @map("fx_converted_currency")
+  status                TransactionStatus @default(pending)
+  externalReference     String?           @map("external_reference")
+  riskScore             Decimal?          @map("risk_score") @db.Decimal(5, 4)
+  createdAt             DateTime          @default(now()) @map("created_at")
+  updatedAt             DateTime          @updatedAt @map("updated_at")
+
+  paymentIntent PaymentIntent  @relation(fields: [paymentIntentId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@index([paymentIntentId])
+  @@index([type])
+  @@index([status])
+  @@map("transactions")
+}
+
+model LedgerEntry {
+  id            String           @id @default(uuid()) @db.Uuid
+  transactionId String           @map("transaction_id") @db.Uuid
+  accountId     String           @map("account_id") @db.Uuid
+  entryType     LedgerEntryType  @map("entry_type")
+  amount        Decimal          @db.Decimal(20, 4)
+  currency      Currency
+  balanceAfter  Decimal          @map("balance_after") @db.Decimal(20, 4)
+  createdAt     DateTime         @default(now()) @map("created_at")
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  account     Account     @relation(fields: [accountId], references: [id])
+
+  @@index([transactionId])
+  @@index([accountId])
+  @@map("ledger_entries")
+}
+
+model Account {
+  id          String      @id @default(uuid()) @db.Uuid
+  userId      String?     @map("user_id") @db.Uuid
+  merchantId  String?     @map("merchant_id") @db.Uuid
+  accountType AccountType @map("account_type")
+  currency    Currency
+  balance     Decimal     @default(0) @db.Decimal(20, 4)
+  frozen      Boolean     @default(false)
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  user          User?         @relation(fields: [userId], references: [id])
+  merchant      Merchant?     @relation(fields: [merchantId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@index([userId])
+  @@index([merchantId])
+  @@index([accountType, currency])
+  @@map("accounts")
+}
+
+model FxRate {
+  id            String   @id @default(uuid()) @db.Uuid
+  fromCurrency  Currency @map("from_currency")
+  toCurrency    Currency @map("to_currency")
+  rate          Decimal  @db.Decimal(20, 8)
+  spread        Decimal  @db.Decimal(10, 6)
+  effectiveRate Decimal  @map("effective_rate") @db.Decimal(20, 8)
+  source        String
+  validFrom     DateTime @map("valid_from")
+  validUntil    DateTime? @map("valid_until")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  @@index([fromCurrency, toCurrency, validFrom])
+  @@map("fx_rates")
+}
+
+model Settlement {
+  id                String           @id @default(uuid()) @db.Uuid
+  merchantId        String           @map("merchant_id") @db.Uuid
+  settlementId      String           @unique @map("settlement_id")
+  settlementDate    DateTime         @map("settlement_date") @db.Date
+  totalAmount       Decimal          @map("total_amount") @db.Decimal(20, 4)
+  currency          Currency
+  transactionCount  Int              @map("transaction_count")
+  status            SettlementStatus @default(pending)
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  merchant Merchant @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+  @@index([status])
+  @@map("settlements")
+}
+
+model AuditLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  timestamp    DateTime @default(now())
+  userId       String?  @map("user_id") @db.Uuid
+  action       String
+  resourceType String   @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  ipAddress    String?  @map("ip_address")
+  requestId    String?  @map("request_id")
+  details      Json?
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([timestamp])
+  @@index([userId])
+  @@index([resourceType, resourceId])
+  @@map("audit_logs")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  tokenHash String   @unique @map("token_hash")
+  expiresAt DateTime @map("expires_at")
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}
+
+model IdempotencyKey {
+  key          String   @id
+  scope        String   // e.g. "payment_intent", "refund"
+  userId       String?  @map("user_id") @db.Uuid
+  requestHash  String   @map("request_hash")
+  responseBody Json?    @map("response_body")
+  statusCode   Int?     @map("status_code")
+  createdAt    DateTime @default(now()) @map("created_at")
+  expiresAt    DateTime @map("expires_at")
+
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
